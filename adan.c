@@ -15,17 +15,26 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#define _GNU_SOURCE
+
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <jansson.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+// TODO: Fix time to be timezone sensitive
 
 typedef struct curl_slist curl_slist;
 
-size_t write_api_data (char *server_data, size_t size, size_t nmemb,
+size_t write_api_data (const char *server_data, size_t size, size_t nmemb,
                        void *client_data);
+
+#define ADAN_API_URL                                                          \
+  "https://api.aladhan.com/v1/nextPrayerByAddress/"                           \
+  "%02d-%02d-%04d?address=Rabat&method=21&timezonestring=UTC"
 
 typedef struct
 {
@@ -37,6 +46,21 @@ int
 main (void)
 {
   resp_data_t resp_data = { 0 };
+
+  time_t current_date;
+  time (&current_date);
+  const struct tm *current_date_info = localtime (&current_date);
+
+  char *url = NULL;
+  size_t url_size = (strlen (ADAN_API_URL) * sizeof (char)) + 16;
+  url = malloc (url_size + 1);
+  if (!url)
+    {
+      return EXIT_FAILURE;
+    }
+
+  snprintf (url, url_size, ADAN_API_URL, current_date_info->tm_mday,
+            current_date_info->tm_mon + 1, current_date_info->tm_year + 1900);
 
   curl_version_info (CURL_VERSION_HTTP2 | CURL_VERSION_HTTP3
                      | CURL_VERSION_IPV6 | CURL_VERSION_THREADSAFE);
@@ -53,9 +77,8 @@ main (void)
 
   curl_easy_setopt (curl_handle, CURLOPT_HTTPGET, 1);
 
-  curl_easy_setopt (curl_handle, CURLOPT_URL,
-                    "https://api.aladhan.com/v1/timingsByCity/"
-                    "21-09-2025?city=Rabat&country=MA");
+  curl_easy_setopt (curl_handle, CURLOPT_URL, url);
+
   curl_easy_setopt (curl_handle, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
 
   curl_slist *headers = NULL;
@@ -98,6 +121,7 @@ main (void)
 
   json_error_t json_error;
   json_t *json_root = json_loads (resp_data.data, 0, &json_error);
+
   free (resp_data.data);
 
   if (!json_root)
@@ -127,17 +151,15 @@ main (void)
       return EXIT_FAILURE;
     }
 
-  json_t *fajr = json_object_get (timings, "Fajr");
-  if (!json_is_string (fajr))
-    {
-      fprintf (stderr, "error: Fajr prayer value is not a string\n");
-      json_decref (json_root);
-      return EXIT_FAILURE;
-    }
+  const char *prayer;
+  json_t *json_prayer;
 
-  const char *fajr_timing = json_string_value (fajr);
+  json_object_foreach (timings, prayer, json_prayer)
+  {
+    const char *prayer_timing = json_string_value (json_prayer);
 
-  printf ("%s\n", fajr_timing);
+    printf ("%s: %s\n", prayer, prayer_timing);
+  }
 
   json_decref (json_root);
 
@@ -145,7 +167,7 @@ main (void)
 }
 
 size_t
-write_api_data (char *server_data, size_t size, size_t nmemb,
+write_api_data (const char *server_data, size_t size, size_t nmemb,
                 void *client_data)
 {
 

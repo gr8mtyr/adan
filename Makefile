@@ -2,6 +2,8 @@ PACKAGE = adan
 CC = gcc
 
 CFLAGS = -Wall -Wextra -Werror -O0 -ggdb -std=gnu23
+# CFLAGS = -O2 -std=gnu23
+
 LDFLAGS = -lcurl -ljansson
 
 $(PACKAGE): $(PACKAGE).c
