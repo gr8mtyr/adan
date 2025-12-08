@@ -13,8 +13,8 @@ CPPFLAGS = -lcurl -ljansson
 
 all: $(PACKAGE)
 
-$(PACKAGE): main.c
-	$(CC) $(CFLAGS) -o $(PACKAGE) main.c $(CPPFLAGS)
+$(PACKAGE): adan.c
+	$(CC) $(CFLAGS) -o $(PACKAGE) adan.c $(CPPFLAGS)
 
 clean:
 	$(RM) $(PACKAGE)

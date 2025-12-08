@@ -5,6 +5,7 @@
 #include <string.h>
 #include <time.h>
 
+#include <argp.h>
 #include <curl/curl.h>
 #include <jansson.h>
 
@@ -24,7 +25,7 @@ typedef struct
   time_t date;
   char *address;
   int method;
-  char *timezonestring;
+  char *timezone;
   int school;
   char *shafaq;
 } adan_api_t;
@@ -40,7 +41,7 @@ adan_api_url_create (adan_api_t api)
   strftime (date, 11, "%d-%m-%Y", localtime (&api.date));
 
   n = snprintf (fmt, size, ADAN_API_URL_FMT, date, api.address, api.method,
-                api.timezonestring, api.school, api.shafaq);
+                api.timezone, api.school, api.shafaq);
 
   if (n < 0)
     return NULL;
@@ -51,7 +52,7 @@ adan_api_url_create (adan_api_t api)
     return NULL;
 
   n = snprintf (fmt, size, ADAN_API_URL_FMT, date, api.address, api.method,
-                api.timezonestring, api.school, api.shafaq);
+                api.timezone, api.school, api.shafaq);
   if (n < 0)
     {
       free (fmt);
@@ -87,9 +88,126 @@ adan_curl_write_cb (const char *ptr, size_t size, size_t nmemb, void *userdata)
   return realsize;
 }
 
-int
-main (void)
+#define shift(xs, xs_sz) (assert (xs_sz > 0), (xs_sz)--, *(xs)++)
+
+const char *argp_program_version = "adan 0.0.0";
+const char *argp_program_bug_address = "<mahmoudessehayli@gmail.com>";
+const char cli_doc[] = "Adan -- find the next prayer time";
+
+// --address
+#define CLI_OPT_ADDRESS 0x80 + 1
+// --timezone
+#define CLI_OPT_TIMEZONE 0x80 + 2
+// --method
+#define CLI_OPT_METHOD 0x80 + 3
+// --shafaq
+#define CLI_OPT_SHAFAQ 0x80 + 4
+// --school
+#define CLI_OPT_SCHOOL 0x80 + 5
+
+struct argp_option cli_argp_options[] = {
+  {
+      "address",
+      CLI_OPT_ADDRESS,
+      "ADDRESS",
+      0,
+      "Address of the user location",
+  },
+  {
+      "timezone",
+      CLI_OPT_TIMEZONE,
+      "TIMEZONE",
+      0,
+      "Valid timzone name\n"
+      "see 'https://php.net/manual/en/timezones.php'",
+  },
+  {
+      "method",
+      CLI_OPT_METHOD,
+      "METHOD",
+      0,
+      "Prayer times calcuation method\n"
+      "possible value: [0-23]\n"
+      "see 'https://aladhan.com/calculation-methods'",
+  },
+  {
+      "shafaq",
+      CLI_OPT_SHAFAQ,
+      "SHAFAQ",
+      OPTION_ARG_OPTIONAL,
+      "Which Shafaq to use if the method is 'Moonsighting Commitee "
+      "Worldwide'\n"
+      "possible values: ['general', 'ahmer', 'abyad']",
+  },
+  {
+      "school",
+      CLI_OPT_SCHOOL,
+      "SCHOOL",
+      OPTION_ARG_OPTIONAL,
+      "Shafi(0) or Hanafi(1)",
+  },
+  { 0 },
+};
+
+typedef struct
 {
+  char *address;  // --address
+  char *timezone; // --timezone
+  int method;     // --method
+  char *shafaq;   // --shafaq
+  int school;     // --school
+} cli_args_t;
+
+static error_t
+cli_argp_parser (int key, char *arg, struct argp_state *state)
+{
+  cli_args_t *cli_args = state->input;
+
+  switch (key)
+    {
+    case CLI_OPT_ADDRESS:
+      cli_args->address = arg;
+      break;
+    case CLI_OPT_TIMEZONE:
+      cli_args->timezone = arg;
+      break;
+    case CLI_OPT_METHOD:
+      cli_args->method = arg ? atoi (arg) : 3;
+      break;
+    case CLI_OPT_SHAFAQ:
+      cli_args->shafaq = arg;
+      break;
+    case CLI_OPT_SCHOOL:
+      cli_args->school = arg ? atoi (arg) : 0;
+      break;
+    case ARGP_NO_ARGS:
+      argp_usage (state);
+    default:
+      return ARGP_ERR_UNKNOWN;
+    }
+  return EXIT_SUCCESS;
+}
+
+struct argp cli_argp = {
+  .doc = cli_doc,
+  .options = cli_argp_options,
+  .parser = cli_argp_parser,
+  0,
+};
+
+int
+main (int argc, char **argv)
+{
+  cli_args_t cli_args = {
+    .address = "Trafalgar Square, London, UK",
+    .timezone = "UTC",
+    .method = 3,
+    .shafaq = "general",
+    .school = 0,
+  };
+
+  argp_parse (&cli_argp, argc, argv, 0, 0, &cli_args);
+
   CURL *curl = NULL;
   CURLU *urlp;
   CURLUcode uc;
@@ -112,11 +230,11 @@ main (void)
 
   adan_api_t adan_api = {
     .date = time (NULL),
-    .address = "Rabat, Morocco, MA",
-    .timezonestring = "Africa/Casablanca",
-    .method = 21,
-    .shafaq = "general",
-    .school = 1,
+    .address = cli_args.address,
+    .timezone = cli_args.timezone,
+    .method = cli_args.method,
+    .shafaq = cli_args.shafaq,
+    .school = cli_args.school,
   };
   char *url = adan_api_url_create (adan_api);
 
