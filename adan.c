@@ -1,187 +1,215 @@
-// adan - cli to display muslim prayer times
-//
-// Copyright (C) 2025 GrimTyr <mahmoudessehayli@gmail.com>
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
-#define _GNU_SOURCE
-
-#include <curl/curl.h>
-#include <curl/easy.h>
-#include <jansson.h>
+#include <assert.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-// TODO: Fix time to be timezone sensitive
+#include <curl/curl.h>
+#include <jansson.h>
 
-typedef struct curl_slist curl_slist;
-
-size_t write_api_data (const char *server_data, size_t size, size_t nmemb,
-                       void *client_data);
-
-#define ADAN_API_URL                                                          \
-  "https://api.aladhan.com/v1/nextPrayerByAddress/"                           \
-  "%02d-%02d-%04d?address=Rabat&method=21&timezonestring=UTC"
+// Refer to
+// `https://aladhan.com/prayer-times-api#get-/nextPrayerByAddress/-date-`
+// for how to fill this api url
+#define ADAN_API_URL_FMT                                                      \
+  "https://api.aladhan.com/v1/nextPrayerByAddress/%s?"                        \
+  "address=%s"                                                                \
+  "&method=%d"                                                                \
+  "&timezonestring=%s"                                                        \
+  "&school=%d"                                                                \
+  "&shafaq=%s"
 
 typedef struct
 {
+  time_t date;
+  char *address;
+  int method;
+  char *timezonestring;
+  int school;
+  char *shafaq;
+} adan_api_t;
+
+static char *
+adan_api_url_create (adan_api_t api)
+{
+  int n = 0;
+  size_t size = 0;
+  char *fmt = NULL;
+
+  char date[11];
+  strftime (date, 11, "%d-%m-%Y", localtime (&api.date));
+
+  n = snprintf (fmt, size, ADAN_API_URL_FMT, date, api.address, api.method,
+                api.timezonestring, api.school, api.shafaq);
+
+  if (n < 0)
+    return NULL;
+
+  size = (size_t)n + 1;
+  fmt = malloc (size);
+  if (fmt == NULL)
+    return NULL;
+
+  n = snprintf (fmt, size, ADAN_API_URL_FMT, date, api.address, api.method,
+                api.timezonestring, api.school, api.shafaq);
+  if (n < 0)
+    {
+      free (fmt);
+      return NULL;
+    }
+
+  return fmt;
+}
+
+typedef struct
+{
+  char *response;
   size_t size;
-  char *data;
-} resp_data_t;
+} adan_response_t;
+
+static size_t
+adan_curl_write_cb (const char *ptr, size_t size, size_t nmemb, void *userdata)
+{
+  assert (size == 1);
+
+  size_t realsize = nmemb;
+  adan_response_t *adan = (adan_response_t *)userdata;
+
+  char *data = realloc (adan->response, adan->size + realsize + 1);
+  if (!data)
+    return 0;
+
+  adan->response = data;
+  memcpy (&(adan->response[adan->size]), ptr, realsize);
+  adan->size += realsize;
+  adan->response[adan->size] = 0;
+
+  return realsize;
+}
 
 int
 main (void)
 {
-  resp_data_t resp_data = { 0 };
+  CURL *curl = NULL;
+  CURLU *urlp;
+  CURLUcode uc;
+  adan_response_t adan_data = { 0 };
 
-  time_t current_date;
-  time (&current_date);
-  const struct tm *current_date_info = localtime (&current_date);
-
-  char *url = NULL;
-  size_t url_size = (strlen (ADAN_API_URL) * sizeof (char)) + 16;
-  url = malloc (url_size + 1);
-  if (!url)
+  CURLcode res = curl_global_init (CURL_GLOBAL_ALL);
+  if (res)
     {
-      return EXIT_FAILURE;
+      return (int)res;
     }
 
-  snprintf (url, url_size, ADAN_API_URL, current_date_info->tm_mday,
-            current_date_info->tm_mon + 1, current_date_info->tm_year + 1900);
+  curl = curl_easy_init ();
 
-  curl_version_info (CURL_VERSION_HTTP2 | CURL_VERSION_HTTP3
-                     | CURL_VERSION_IPV6 | CURL_VERSION_THREADSAFE);
-
-  curl_global_init (CURL_GLOBAL_ALL);
-
-  CURL *curl_handle = curl_easy_init ();
-
-  if (!curl_handle)
+  if (curl == NULL)
     {
+      fprintf (stderr, "error: failed to initialize http client\n");
+      curl_global_cleanup ();
+      return (int)res;
+    }
+
+  adan_api_t adan_api = {
+    .date = time (NULL),
+    .address = "Rabat, Morocco, MA",
+    .timezonestring = "Africa/Casablanca",
+    .method = 21,
+    .shafaq = "general",
+    .school = 1,
+  };
+  char *url = adan_api_url_create (adan_api);
+
+  urlp = curl_url ();
+  uc = curl_url_set (urlp, CURLUPART_URL, url,
+                     CURLU_URLENCODE | CURLU_ALLOW_SPACE);
+
+  if (uc)
+    {
+      fprintf (stderr, "error: failed to set url: %s\n",
+               curl_easy_strerror ((CURLcode)uc));
+      free (adan_data.response);
+      free (url);
+      curl_url_cleanup (urlp);
+      curl_easy_cleanup (curl);
       curl_global_cleanup ();
       return EXIT_FAILURE;
     }
 
-  curl_easy_setopt (curl_handle, CURLOPT_HTTPGET, 1);
+  curl_easy_setopt (curl, CURLOPT_CURLU, urlp);
+  curl_easy_setopt (curl, CURLOPT_PROTOCOLS_STR, "https");
+  curl_easy_setopt (curl, CURLOPT_WRITEDATA, (void *)&adan_data);
+  curl_easy_setopt (curl, CURLOPT_WRITEFUNCTION, adan_curl_write_cb);
 
-  curl_easy_setopt (curl_handle, CURLOPT_URL, url);
+  res = curl_easy_perform (curl);
 
-  curl_easy_setopt (curl_handle, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
-
-  curl_slist *headers = NULL;
-
-  headers = curl_slist_append (headers, "Accept: application/json");
-
-  curl_easy_setopt (curl_handle, CURLOPT_HTTPHEADER, headers);
-
-  curl_easy_setopt (curl_handle, CURLOPT_WRITEFUNCTION, write_api_data);
-
-  curl_easy_setopt (curl_handle, CURLOPT_WRITEDATA, (void *)&resp_data);
-
-  char err_buf[CURL_ERROR_SIZE];
-
-  curl_easy_setopt (curl_handle, CURLOPT_ERRORBUFFER, err_buf);
-  err_buf[0] = 0;
-
-  CURLcode resp_code = curl_easy_perform (curl_handle);
-
-  if (resp_code != CURLE_OK)
+  if (res != CURLE_OK)
     {
-      size_t len = strlen (err_buf);
-      fprintf (stderr, "\napi: (%d) ", resp_code);
-      if (len)
-        {
-          fprintf (stderr, "%s%s", err_buf,
-                   ((err_buf[len - 1] != '\n') ? "\n" : ""));
-        }
-      else
-        {
-          fprintf (stderr, "%s\n", curl_easy_strerror (resp_code));
-        }
+      fprintf (stderr, "error: curl failed %s\n", curl_easy_strerror (res));
+      free (adan_data.response);
+      free (url);
+      curl_url_cleanup (urlp);
+      curl_easy_cleanup (curl);
+      curl_global_cleanup ();
+      return (int)res;
     }
 
-  curl_slist_free_all (headers);
-
-  curl_easy_cleanup (curl_handle);
-
+  free (url);
+  curl_url_cleanup (urlp);
+  curl_easy_cleanup (curl);
   curl_global_cleanup ();
 
-  json_error_t json_error;
-  json_t *json_root = json_loads (resp_data.data, 0, &json_error);
+  json_t *js_root;
+  json_error_t js_error;
 
-  free (resp_data.data);
+  js_root = json_loads (adan_data.response, 0, &js_error);
+  free (adan_data.response);
 
-  if (!json_root)
+  if (js_root == NULL)
     {
-      fprintf (stderr, "error: on line: %d: %s\n", json_error.line,
-               json_error.text);
+      fprintf (stderr, "error: failed to parse response at (%d:%d): %s\n",
+               js_error.line, js_error.column, js_error.text);
       return EXIT_FAILURE;
     }
 
-  json_t *prayer_times_by_city_data, *timings;
-
-  prayer_times_by_city_data = json_object_get (json_root, "data");
-  if (!json_is_object (prayer_times_by_city_data))
+  if (!json_is_object (js_root))
     {
-      fprintf (stderr,
-               "error: prayer times by city data is not a json object\n");
-      json_decref (json_root);
+      fprintf (stderr, "error: root is not a object\n");
+      json_decref (js_root);
       return EXIT_FAILURE;
     }
 
-  timings = json_object_get (prayer_times_by_city_data, "timings");
-  if (!json_is_object (timings))
+  json_t *js_data = json_object_get (js_root, "data");
+  if (!json_is_object (js_data))
     {
-      fprintf (stderr,
-               "error: prayer times by city timings is not a json object\n");
-      json_decref (json_root);
+      fprintf (stderr, "error: data is not a object\n");
+      json_decref (js_root);
       return EXIT_FAILURE;
     }
 
-  const char *prayer;
-  json_t *json_prayer;
+  json_t *js_timings = json_object_get (js_data, "timings");
+  if (!json_is_object (js_timings))
+    {
+      fprintf (stderr, "error: timings is not a object\n");
+      json_decref (js_root);
+      return EXIT_FAILURE;
+    }
 
-  json_object_foreach (timings, prayer, json_prayer)
-  {
-    const char *prayer_timing = json_string_value (json_prayer);
+  void *iter = json_object_iter (js_timings);
+  const char *prayer_name = json_object_iter_key (iter);
+  json_t *js_prayer_time = json_object_iter_value (iter);
 
-    printf ("%s: %s\n", prayer, prayer_timing);
-  }
+  if (!json_is_string (js_prayer_time))
+    {
+      fprintf (stderr, "error: prayer time is not a string\n");
+      json_decref (js_root);
+      return EXIT_FAILURE;
+    }
+  const char *prayer_time = json_string_value (js_prayer_time);
 
-  json_decref (json_root);
+  printf ("%s: %s\n", prayer_name, prayer_time);
+
+  json_decref (js_root);
 
   return EXIT_SUCCESS;
-}
-
-size_t
-write_api_data (const char *server_data, size_t size, size_t nmemb,
-                void *client_data)
-{
-
-  size_t real_size = size * nmemb;
-  resp_data_t *resp_data = (resp_data_t *)client_data;
-
-  char *ptr = realloc (resp_data->data, resp_data->size + real_size + 1);
-  if (!ptr)
-    return 0;
-
-  resp_data->data = ptr;
-  memcpy (&(resp_data->data[resp_data->size]), server_data, real_size);
-  resp_data->size += real_size;
-  resp_data->data[resp_data->size] = 0;
-
-  return real_size;
 }

@@ -1,15 +1,22 @@
 PACKAGE = adan
+
+RM = rm -rdvf
+
 CC = gcc
+## Debug
+# CFLAGS = -Wall -Wextra -Werror -Wpedantic -O0 -ggdb -std=gnu11 -fsanitize=address,undefined
+# Valgrind
+# CFLAGS = -Wall -Wextra -Werror -Wpedantic -O0 -ggdb -std=gnu11
+## Release
+CFLAGS = -Os -s
+CPPFLAGS = -lcurl -ljansson
 
-CFLAGS = -Wall -Wextra -Werror -O0 -ggdb -std=gnu23
-# CFLAGS = -O2 -std=gnu23
+all: $(PACKAGE)
 
-LDFLAGS = -lcurl -ljansson
-
-$(PACKAGE): $(PACKAGE).c
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $(PACKAGE) $<
+$(PACKAGE): main.c
+	$(CC) $(CFLAGS) -o $(PACKAGE) main.c $(CPPFLAGS)
 
 clean:
-	rm -rdvf $(PACKAGE)
+	$(RM) $(PACKAGE)
 
-.PHONY: clean
+.PHONY: all clean
